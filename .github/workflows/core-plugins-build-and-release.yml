@@ -118,6 +118,7 @@ jobs:
           echo "======================================="
       - name: build:frontend
         shell: bash
+        # TODO: Do not use :commit if it's not from main
         run: |
           yarn plugin:build:commit --scope="@grafana-plugins/${{ inputs.plugin_id }}"
       - name: build:backend
@@ -129,6 +130,10 @@ jobs:
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           mkdir -p ci/jobs/package
+          # workaround while I fix grabpl
+          mkdir src
+          cp -r * src
+          # workaround end
           bin/grabpl plugin package
         env:
           GRAFANA_API_KEY: ${{ secrets.PLUGINS_GRAFANA_API_KEY }}
