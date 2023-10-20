@@ -132,7 +132,7 @@ jobs:
           mkdir -p ci/jobs/package
           # workaround while I fix grabpl
           mkdir src
-          cp -r * src
+          cp -r * src || true
           # workaround end
           bin/grabpl plugin package
         env:
