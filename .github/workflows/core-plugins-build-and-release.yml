@@ -1,0 +1,233 @@
+on:
+  workflow_dispatch:
+    inputs:
+      plugin_id:
+        description: "ID of the plugin you want to publish"
+        required: true
+        type: choice
+        options:
+          - grafana-testdata-datasource
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-${{ inputs.plugin_id }}
+  cancel-in-progress: true
+
+env:
+  NODEJS_VERSION: 18.x
+  GO_VERSION: 1.21
+  GO_LINT_VERSION: 1.51.1
+  GRABPL_VERSION: 3.0.41
+  GCP_BUCKET: plugins-community-staging # integration-artifacts
+
+jobs:
+  build-and-publish:
+    name: Build and publish ${{ inputs.plugin_id }}
+    runs-on: ubuntu-latest
+    outputs:
+      has_backend: ${{ steps.check_backend.outputs.has_backend }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v3
+      - name: Verify inputs
+        run: |
+          if [ -z ${{ inputs.plugin_id }} ]; then echo "Missing plugin ID"; exit 1; fi
+          if [ -z ${{ secrets.PLUGINS_GCOM_TOKEN }} ]; then echo "Missing GCOM token"; exit 1; fi
+          if [ -z ${{ secrets.PLUGINS_GOOGLE_CREDENTIALS }} ]; then echo "Missing gcloud creds"; exit 1; fi
+          if [ -z ${{ secrets.PLUGINS_GRAFANA_API_KEY }} ]; then echo "Missing Grafana API key"; exit 1; fi
+      - name: Check existing release
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        env:
+          GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
+        run: |
+          version=$(cat package.json | jq -r .version)
+          api_res=$(curl -X 'GET' -H "Authorization: Bearer $GCOM_TOKEN" \
+            'https://grafana.com/api/plugins/${{ inputs.plugin_id }}?version=${version}' \
+            -H 'accept: application/json')
+          api_res_code=$(echo $api_res | jq -r .code)
+          if [ "$api_res_code" = "NotFound" ]; then
+            echo "No existing release found"
+          else
+            echo "Expecting a missing release, got:"
+            echo $api_res
+            exit 1
+          fi
+      - name: 'Authenticate to Google Cloud'
+        uses: 'google-github-actions/auth@v1'
+        with:
+          credentials_json: '${{ secrets.PLUGINS_GOOGLE_CREDENTIALS }}'
+      - name: 'Set up Cloud SDK'
+        uses: 'google-github-actions/setup-gcloud@v1'
+      - name: Setup nodejs environment
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ env.NODEJS_VERSION }}
+          cache: yarn
+      - name: Install frontend dependencies
+        shell: bash
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          yarn install --immutable
+      - name: Download grabpl executable
+        shell: sh
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          [ ! -d ./bin ] && mkdir -pv ./bin || true
+          curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
+          chmod 0755 ./bin/grabpl
+      - name: Check backend
+        id: check_backend
+        shell: bash
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          if [ -f ./go.mod ]; then
+            echo "::set-output name=has_backend::true"
+          else
+            echo "::set-output name=has_backend::false"
+          fi
+      - name: Setup golang environment
+        uses: actions/setup-go@v4
+        if: steps.check_backend.outputs.has_backend == 'true'
+        with:
+          go-version: ${{ env.GO_VERSION }}
+      - name: Install Mage
+        shell: bash
+        if: steps.check_backend.outputs.has_backend == 'true'
+        run: |
+          go install github.com/magefile/mage
+      - name: Install golangci-lint
+        if: steps.check_backend.outputs.has_backend == 'true'
+        shell: bash
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v${{ env.GO_LINT_VERSION }}
+      - name: Check tools
+        shell: bash
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          echo "======================================="
+          echo "  Frontend tools"
+          echo "======================================="
+          echo "-------- node version -----"
+          node --version
+          echo "-------- npm version -----"
+          npm --version
+          echo "-------- yarn version -----"
+          yarn --version
+          echo "======================================="
+          echo "  Misc tools"
+          echo "======================================="
+          echo "-------- docker version -----"
+          docker --version
+          echo "-------- jq version -----"
+          jq --version
+          echo "-------- grabpl version -----"
+          ./bin/grabpl --version
+          echo "======================================="
+      - name: Check backend tools
+        shell: bash
+        if: steps.check_backend.outputs.has_backend == 'true'
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          echo "======================================="
+          echo "  Backend tools"
+          echo "======================================="
+          echo "-------- go version -----"
+          go version
+          echo "-------- mage version -----"
+          mage --version
+          echo "-------- golangci-lint version -----"
+          golangci-lint --version
+          echo "======================================="
+      - name: test:frontend
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        shell: bash
+        run: |
+          yarn test:ci
+      - name: lint:frontend
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        shell: bash
+        run: |
+          yarn lint
+      - name: build:frontend
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        shell: bash
+        run: |
+          yarn build
+      - name: lint:backend
+        if: steps.check_backend.outputs.has_backend == 'true'
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        shell: bash
+        run: |
+          mage lint
+      - name: test:backend
+        if: steps.check_backend.outputs.has_backend == 'true'
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        shell: bash
+        run: |
+          mage test
+      - name: build:backend
+        if: steps.check_backend.outputs.has_backend == 'true'
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        shell: bash
+        run: |
+          mage -v
+      - name: package
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          mkdir -p ci/jobs/package
+          bin/grabpl plugin package
+        env:
+          GRAFANA_API_KEY: ${{ secrets.PLUGINS_GRAFANA_API_KEY }}
+          PLUGIN_SIGNATURE_TYPE: grafana
+      - name: store build artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: build-artifacts
+          path: ./public/plugins/${{ inputs.plugin_id }}/ci/packages/*.zip
+      - name: Publish release to Google Cloud Storage
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        run: |
+          echo "Publish release to Google Cloud Storage:"
+          version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
+          echo "Plugin version: $version"
+          touch ci/packages/windows ci/packages/darwin ci/packages/linux ci/packages/any
+          gsutil -m cp -r ci/packages/*windows* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/windows
+          gsutil -m cp -r ci/packages/*linux* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux 
+          gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin
+          gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/any
+      - name: Publish new plugin version on grafana.com
+        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        env:
+          GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
+        run: |
+          echo "Publish new plugin version on grafana.com:"
+          version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
+          echo "Plugin version: $version"
+          curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" https://grafana-dev.com/api/plugins -d "{
+            \"url\": \"https://github.com/grafana/grafana/tree/main/public/plugins/${{ inputs.plugin_id }}\",
+            \"download\": {
+              \"linux-amd64\": {
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_amd64.zip\",
+                \"md5\": \"$(cat ci/packages/info-linux_amd64.json | jq -r .plugin.md5)\"
+              },
+              \"linux-arm64\": {
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_arm64.zip\",
+                \"md5\": \"$(cat ci/packages/info-linux_arm64.json | jq -r .plugin.md5)\"
+              },
+              \"linux-arm\": {
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_arm.zip\",
+                \"md5\": \"$(cat ci/packages/info-linux_arm.json | jq -r .plugin.md5)\"
+              },
+              \"windows-amd64\": {
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/windows/${{ inputs.plugin_id }}-${version}.windows_amd64.zip\",
+                \"md5\": \"$(cat ci/packages/info-windows_amd64.json | jq -r .plugin.md5)\"
+              },
+              \"darwin-amd64\": {
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin/${{ inputs.plugin_id }}-${version}.darwin_amd64.zip\",
+                \"md5\": \"$(cat ci/packages/info-darwin_amd64.json | jq -r .plugin.md5)\"
+              },
+              \"darwin-arm64\": {
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin/${{ inputs.plugin_id }}-${version}.darwin_arm64.zip\",
+                \"md5\": \"$(cat ci/packages/info-darwin_arm64.json | jq -r .plugin.md5)\"
+              }
+            }
+          }"
