@@ -7,6 +7,13 @@ on:
         type: choice
         options:
           - grafana-testdata-datasource
+      type:
+        description: "Datasource or panel"
+        required: true
+        type: choice
+        options:
+          - datasource
+          - panel
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-${{ inputs.plugin_id }}
@@ -31,26 +38,6 @@ jobs:
       - name: Verify inputs
         run: |
           if [ -z ${{ inputs.plugin_id }} ]; then echo "Missing plugin ID"; exit 1; fi
-          if [ -z ${{ secrets.PLUGINS_GCOM_TOKEN }} ]; then echo "Missing GCOM token"; exit 1; fi
-          if [ -z ${{ secrets.PLUGINS_GOOGLE_CREDENTIALS }} ]; then echo "Missing gcloud creds"; exit 1; fi
-          if [ -z ${{ secrets.PLUGINS_GRAFANA_API_KEY }} ]; then echo "Missing Grafana API key"; exit 1; fi
-      - name: Check existing release
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
-        env:
-          GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
-        run: |
-          version=$(cat package.json | jq -r .version)
-          api_res=$(curl -X 'GET' -H "Authorization: Bearer $GCOM_TOKEN" \
-            'https://grafana.com/api/plugins/${{ inputs.plugin_id }}?version=${version}' \
-            -H 'accept: application/json')
-          api_res_code=$(echo $api_res | jq -r .code)
-          if [ "$api_res_code" = "NotFound" ]; then
-            echo "No existing release found"
-          else
-            echo "Expecting a missing release, got:"
-            echo $api_res
-            exit 1
-          fi
       - name: 'Authenticate to Google Cloud'
         uses: 'google-github-actions/auth@v1'
         with:
@@ -64,12 +51,12 @@ jobs:
           cache: yarn
       - name: Install frontend dependencies
         shell: bash
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           yarn install --immutable
       - name: Download grabpl executable
         shell: sh
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           [ ! -d ./bin ] && mkdir -pv ./bin || true
           curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
@@ -77,9 +64,8 @@ jobs:
       - name: Check backend
         id: check_backend
         shell: bash
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
         run: |
-          if [ -f ./go.mod ]; then
+          if [ -f ./pkg/tsdb/${{ inputs.plugin_id }}/go.mod ]; then
             echo "::set-output name=has_backend::true"
           else
             echo "::set-output name=has_backend::false"
@@ -94,14 +80,9 @@ jobs:
         if: steps.check_backend.outputs.has_backend == 'true'
         run: |
           go install github.com/magefile/mage
-      - name: Install golangci-lint
-        if: steps.check_backend.outputs.has_backend == 'true'
-        shell: bash
-        run: |
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(go env GOPATH)/bin v${{ env.GO_LINT_VERSION }}
       - name: Check tools
         shell: bash
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           echo "======================================="
           echo "  Frontend tools"
@@ -125,7 +106,7 @@ jobs:
       - name: Check backend tools
         shell: bash
         if: steps.check_backend.outputs.has_backend == 'true'
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           echo "======================================="
           echo "  Backend tools"
@@ -134,57 +115,49 @@ jobs:
           go version
           echo "-------- mage version -----"
           mage --version
-          echo "-------- golangci-lint version -----"
-          golangci-lint --version
           echo "======================================="
-      - name: test:frontend
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
-        shell: bash
-        run: |
-          yarn test:ci
-      - name: lint:frontend
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
-        shell: bash
-        run: |
-          yarn lint
       - name: build:frontend
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         shell: bash
         run: |
-          yarn build
-      - name: lint:backend
-        if: steps.check_backend.outputs.has_backend == 'true'
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
-        shell: bash
-        run: |
-          mage lint
-      - name: test:backend
-        if: steps.check_backend.outputs.has_backend == 'true'
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
-        shell: bash
-        run: |
-          mage test
+          yarn build:commit
       - name: build:backend
         if: steps.check_backend.outputs.has_backend == 'true'
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         shell: bash
         run: |
           mage -v
       - name: package
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           mkdir -p ci/jobs/package
           bin/grabpl plugin package
         env:
           GRAFANA_API_KEY: ${{ secrets.PLUGINS_GRAFANA_API_KEY }}
           PLUGIN_SIGNATURE_TYPE: grafana
+      - name: Check existing release
+        env:
+          GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
+        run: |
+          version="$(cat package.json | jq -r .version)-$(git rev-parse --short HEAD)"
+          api_res=$(curl -X 'GET' -H "Authorization: Bearer $GCOM_TOKEN" \
+            'https://grafana.com/api/plugins/${{ inputs.plugin_id }}?version=${version}' \
+            -H 'accept: application/json')
+          api_res_code=$(echo $api_res | jq -r .code)
+          if [ "$api_res_code" = "NotFound" ]; then
+            echo "No existing release found"
+          else
+            echo "Expecting a missing release, got:"
+            echo $api_res
+            exit 1
+          fi
       - name: store build artifacts
         uses: actions/upload-artifact@v3
         with:
           name: build-artifacts
-          path: ./public/plugins/${{ inputs.plugin_id }}/ci/packages/*.zip
+          path: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}/ci/packages/*.zip
       - name: Publish release to Google Cloud Storage
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           echo "Publish release to Google Cloud Storage:"
           version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
@@ -195,7 +168,7 @@ jobs:
           gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin
           gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/any
       - name: Publish new plugin version on grafana.com
-        working-directory: ./public/plugins/${{ inputs.plugin_id }}
+        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         env:
           GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
         run: |
@@ -203,7 +176,7 @@ jobs:
           version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
           echo "Plugin version: $version"
           curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" https://grafana-dev.com/api/plugins -d "{
-            \"url\": \"https://github.com/grafana/grafana/tree/main/public/plugins/${{ inputs.plugin_id }}\",
+            \"url\": \"https://github.com/grafana/grafana/tree/main/public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}\",
             \"download\": {
               \"linux-amd64\": {
                 \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_amd64.zip\",
