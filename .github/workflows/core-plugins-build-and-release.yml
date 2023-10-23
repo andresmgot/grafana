@@ -148,15 +148,16 @@ jobs:
           api_res=$(curl -X 'GET' -H "Authorization: Bearer $GCOM_TOKEN" \
             '${{ env.GCOM_API}}/api/plugins/${{ inputs.plugin_id }}?version=${{ steps.build_frontend.outputs.version }}' \
             -H 'accept: application/json')
-          api_res_code=$(echo $api_res | jq -r .code)
-          if [ "$api_res_code" = "NotFound" ]; then
-            echo "No existing release found"
-          else
-            echo "Expecting a missing release, got:"
-            echo $api_res
-            # TODO: Re-enable
-            # exit 1
-          fi
+          echo $api_res
+          # TODO: Re-enable
+          # api_res_code=$(echo $api_res | jq -r .code)
+          # if [ "$api_res_code" = "NotFound" ]; then
+          #   echo "No existing release found"
+          # else
+          #   echo "Expecting a missing release, got:"
+          #   echo $api_res
+          #   exit 1
+          # fi
       - name: store build artifacts
         uses: actions/upload-artifact@v3
         with:
