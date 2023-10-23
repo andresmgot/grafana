@@ -23,7 +23,7 @@ env:
   NODEJS_VERSION: 18.x
   GO_VERSION: 1.21
   GO_LINT_VERSION: 1.51.1
-  GRABPL_VERSION: 3.0.41
+  GRABPL_VERSION: 3.0.43
   GCP_BUCKET: plugins-community-staging # integration-artifacts
 
 jobs:
@@ -118,9 +118,13 @@ jobs:
           echo "======================================="
       - name: build:frontend
         shell: bash
-        # TODO: Do not use :commit if it's not from main
         run: |
-          yarn plugin:build:commit --scope="@grafana-plugins/${{ inputs.plugin_id }}"
+          command="plugin:build:commit"
+          if [ "$GITHUB_REF" != "refs/heads/main" ]; then
+            # Release branch, do not add commit hash to version
+            command="plugin:build"
+          fi
+          yarn $command --scope="@grafana-plugins/${{ inputs.plugin_id }}"
       - name: build:backend
         if: steps.check_backend.outputs.has_backend == 'true'
         shell: bash
@@ -130,10 +134,6 @@ jobs:
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           mkdir -p ci/jobs/package
-          # workaround while I fix grabpl
-          mkdir src
-          cp -r * src || true
-          # workaround end
           bin/grabpl plugin package
         env:
           GRAFANA_API_KEY: ${{ secrets.PLUGINS_GRAFANA_API_KEY }}
@@ -163,14 +163,14 @@ jobs:
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           echo "Publish release to Google Cloud Storage:"
-          version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
+          version=$(cat ci/dist/${{ inputs.plugin_id }}plugin.json | jq -r .info.version)
           echo "Plugin version: $version"
           touch ci/packages/windows ci/packages/darwin ci/packages/linux ci/packages/any
           gsutil -m cp -r ci/packages/*windows* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/windows
           gsutil -m cp -r ci/packages/*linux* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux 
           gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin
           gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/any
-      - name: Publish new plugin version on grafana.com
+      - name: Publish new plugin version on grafana.com/
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         env:
           GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
@@ -178,7 +178,7 @@ jobs:
           echo "Publish new plugin version on grafana.com:"
           version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
           echo "Plugin version: $version"
-          curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" https://grafana-dev.com/api/plugins -d "{
+          result=`curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" https://grafana-dev.com/api/plugins -d "{
             \"url\": \"https://github.com/grafana/grafana/tree/main/public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}\",
             \"download\": {
               \"linux-amd64\": {
@@ -206,4 +206,9 @@ jobs:
                 \"md5\": \"$(cat ci/packages/info-darwin_arm64.json | jq -r .plugin.md5)\"
               }
             }
-          }"
+          }"`
+          echo $result
+          if [[ "$(echo $result | jq -r .version)" == "null" ]]; then
+            echo "Failed to publish plugin version"
+            exit 1
+          fi
