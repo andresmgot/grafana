@@ -25,6 +25,7 @@ env:
   GO_LINT_VERSION: 1.51.1
   GRABPL_VERSION: 3.0.43
   GCP_BUCKET: plugins-community-staging # integration-artifacts
+  GCOM_API: https://grafana-dev.com
 
 jobs:
   build-and-publish:
@@ -144,7 +145,7 @@ jobs:
         run: |
           version="$(cat package.json | jq -r .version)-$(git rev-parse --short HEAD)"
           api_res=$(curl -X 'GET' -H "Authorization: Bearer $GCOM_TOKEN" \
-            'https://grafana.com/api/plugins/${{ inputs.plugin_id }}?version=${version}' \
+            '${{ env.GCOM_API}}/api/plugins/${{ inputs.plugin_id }}?version=${version}' \
             -H 'accept: application/json')
           api_res_code=$(echo $api_res | jq -r .code)
           if [ "$api_res_code" = "NotFound" ]; then
@@ -163,14 +164,14 @@ jobs:
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           echo "Publish release to Google Cloud Storage:"
-          version=$(cat ci/dist/${{ inputs.plugin_id }}plugin.json | jq -r .info.version)
+          version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
           echo "Plugin version: $version"
           touch ci/packages/windows ci/packages/darwin ci/packages/linux ci/packages/any
           gsutil -m cp -r ci/packages/*windows* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/windows
           gsutil -m cp -r ci/packages/*linux* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux 
           gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin
           gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/any
-      - name: Publish new plugin version on grafana.com/
+      - name: Publish new plugin version on grafana.com
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         env:
           GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
@@ -178,7 +179,7 @@ jobs:
           echo "Publish new plugin version on grafana.com:"
           version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
           echo "Plugin version: $version"
-          result=`curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" https://grafana-dev.com/api/plugins -d "{
+          result=`curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" ${{ env.GCOM_API}}/api/plugins -d "{
             \"url\": \"https://github.com/grafana/grafana/tree/main/public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}\",
             \"download\": {
               \"linux-amd64\": {
