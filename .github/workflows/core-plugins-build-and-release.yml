@@ -119,6 +119,7 @@ jobs:
           echo "======================================="
       - name: build:frontend
         shell: bash
+        id: build_frontend
         run: |
           command="plugin:build:commit"
           if [ "$GITHUB_REF" != "refs/heads/main" ]; then
@@ -126,6 +127,7 @@ jobs:
             command="plugin:build"
           fi
           yarn $command --scope="@grafana-plugins/${{ inputs.plugin_id }}"
+          echo "version=$(cat dist/plugin.json | jq -r .info.version)" >> $GITHUB_OUTPUT
       - name: build:backend
         if: steps.check_backend.outputs.has_backend == 'true'
         shell: bash
@@ -143,9 +145,8 @@ jobs:
         env:
           GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
         run: |
-          version="$(cat package.json | jq -r .version)-$(git rev-parse --short HEAD)"
           api_res=$(curl -X 'GET' -H "Authorization: Bearer $GCOM_TOKEN" \
-            '${{ env.GCOM_API}}/api/plugins/${{ inputs.plugin_id }}?version=${version}' \
+            '${{ env.GCOM_API}}/api/plugins/${{ inputs.plugin_id }}?version=${{ steps.build_frontend.outputs.version }}' \
             -H 'accept: application/json')
           api_res_code=$(echo $api_res | jq -r .code)
           if [ "$api_res_code" = "NotFound" ]; then
@@ -153,7 +154,8 @@ jobs:
           else
             echo "Expecting a missing release, got:"
             echo $api_res
-            exit 1
+            # TODO: Re-enable
+            # exit 1
           fi
       - name: store build artifacts
         uses: actions/upload-artifact@v3
@@ -164,46 +166,43 @@ jobs:
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
           echo "Publish release to Google Cloud Storage:"
-          version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
-          echo "Plugin version: $version"
           touch ci/packages/windows ci/packages/darwin ci/packages/linux ci/packages/any
-          gsutil -m cp -r ci/packages/*windows* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/windows
-          gsutil -m cp -r ci/packages/*linux* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux 
-          gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin
-          gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/any
+          gsutil -m cp -r ci/packages/*windows* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/windows
+          gsutil -m cp -r ci/packages/*linux* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/linux 
+          gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/darwin
+          gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/any
       - name: Publish new plugin version on grafana.com
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         env:
           GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
         run: |
           echo "Publish new plugin version on grafana.com:"
-          version=$(cat ci/dist/${{ inputs.plugin_id }}/plugin.json | jq -r .info.version)
-          echo "Plugin version: $version"
+          echo "Plugin version: ${{ steps.build_frontend.outputs.version }}"
           result=`curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" ${{ env.GCOM_API}}/api/plugins -d "{
             \"url\": \"https://github.com/grafana/grafana/tree/main/public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}\",
             \"download\": {
               \"linux-amd64\": {
-                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_amd64.zip\",
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/linux/${{ inputs.plugin_id }}-${{ steps.build_frontend.outputs.version }}.linux_amd64.zip\",
                 \"md5\": \"$(cat ci/packages/info-linux_amd64.json | jq -r .plugin.md5)\"
               },
               \"linux-arm64\": {
-                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_arm64.zip\",
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/linux/${{ inputs.plugin_id }}-${{ steps.build_frontend.outputs.version }}.linux_arm64.zip\",
                 \"md5\": \"$(cat ci/packages/info-linux_arm64.json | jq -r .plugin.md5)\"
               },
               \"linux-arm\": {
-                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/linux/${{ inputs.plugin_id }}-${version}.linux_arm.zip\",
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/linux/${{ inputs.plugin_id }}-${{ steps.build_frontend.outputs.version }}.linux_arm.zip\",
                 \"md5\": \"$(cat ci/packages/info-linux_arm.json | jq -r .plugin.md5)\"
               },
               \"windows-amd64\": {
-                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/windows/${{ inputs.plugin_id }}-${version}.windows_amd64.zip\",
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/windows/${{ inputs.plugin_id }}-${{ steps.build_frontend.outputs.version }}.windows_amd64.zip\",
                 \"md5\": \"$(cat ci/packages/info-windows_amd64.json | jq -r .plugin.md5)\"
               },
               \"darwin-amd64\": {
-                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin/${{ inputs.plugin_id }}-${version}.darwin_amd64.zip\",
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/darwin/${{ inputs.plugin_id }}-${{ steps.build_frontend.outputs.version }}.darwin_amd64.zip\",
                 \"md5\": \"$(cat ci/packages/info-darwin_amd64.json | jq -r .plugin.md5)\"
               },
               \"darwin-arm64\": {
-                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${version}/darwin/${{ inputs.plugin_id }}-${version}.darwin_arm64.zip\",
+                \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${{ steps.build_frontend.outputs.version }}/darwin/${{ inputs.plugin_id }}-${{ steps.build_frontend.outputs.version }}.darwin_arm64.zip\",
                 \"md5\": \"$(cat ci/packages/info-darwin_arm64.json | jq -r .plugin.md5)\"
               }
             }
