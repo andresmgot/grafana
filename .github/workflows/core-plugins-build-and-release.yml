@@ -128,7 +128,7 @@ jobs:
             command="plugin:build"
           fi
           yarn $command --scope="@grafana-plugins/${{ inputs.plugin_id }}"
-          version=$(cat dist/plugin.json | jq -r .info.version)
+          version=$(cat public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}/dist/plugin.json | jq -r .info.version)
           echo "version=${version}" >> $GITHUB_OUTPUT
       - name: build:backend
         if: steps.check_backend.outputs.has_backend == 'true'
