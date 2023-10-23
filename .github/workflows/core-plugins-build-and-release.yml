@@ -60,9 +60,10 @@ jobs:
         shell: sh
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
-          [ ! -d ./bin ] && mkdir -pv ./bin || true
-          curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
-          chmod 0755 ./bin/grabpl
+          # TODO: Re-enable
+          # [ ! -d ./bin ] && mkdir -pv ./bin || true
+          # curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
+          # chmod 0755 ./bin/grabpl
       - name: Check backend
         id: check_backend
         shell: bash
@@ -136,8 +137,6 @@ jobs:
         env:
           VERSION: ${{ steps.build_frontend.outputs.version }}  
         run: |
-          echo "version: ${VERSION}"
-          echo "version from step: ${{ steps.build_frontend.outputs.version }}"
           make build-plugin-go PLUGIN_ID=${{ inputs.plugin_id }}
       - name: package
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
