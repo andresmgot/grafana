@@ -128,11 +128,16 @@ jobs:
             command="plugin:build"
           fi
           yarn $command --scope="@grafana-plugins/${{ inputs.plugin_id }}"
-          echo "version=$(cat dist/plugin.json | jq -r .info.version)" >> $GITHUB_OUTPUT
+          version=$(cat dist/plugin.json | jq -r .info.version)
+          echo "version=${version}" >> $GITHUB_OUTPUT
       - name: build:backend
         if: steps.check_backend.outputs.has_backend == 'true'
         shell: bash
+        env:
+          VERSION: ${{ steps.build_frontend.outputs.version }}  
         run: |
+          echo "version: ${VERSION}"
+          echo "version from step: ${{ steps.build_frontend.outputs.version }}"
           make build-plugin-go PLUGIN_ID=${{ inputs.plugin_id }}
       - name: package
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
