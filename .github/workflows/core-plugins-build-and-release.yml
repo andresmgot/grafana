@@ -23,9 +23,9 @@ env:
   NODEJS_VERSION: 18.x
   GO_VERSION: 1.21
   GO_LINT_VERSION: 1.51.1
-  GRABPL_VERSION: 3.0.43
+  GRABPL_VERSION: 3.0.44
   GCP_BUCKET: plugins-community-staging # integration-artifacts
-  GCOM_API: https://grafana-dev.com
+  GCOM_API: https://grafana-dev.com # https://grafana.com
 
 jobs:
   build-and-publish:
@@ -60,10 +60,9 @@ jobs:
         shell: sh
         working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
         run: |
-          # TODO: Re-enable
-          # [ ! -d ./bin ] && mkdir -pv ./bin || true
-          # curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
-          # chmod 0755 ./bin/grabpl
+          [ ! -d ./bin ] && mkdir -pv ./bin || true
+          curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
+          chmod 0755 ./bin/grabpl
       - name: Check backend
         id: check_backend
         shell: bash
