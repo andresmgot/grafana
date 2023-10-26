@@ -7,13 +7,6 @@ on:
         type: choice
         options:
           - grafana-testdata-datasource
-      type:
-        description: "Datasource or panel"
-        required: true
-        type: choice
-        options:
-          - datasource
-          - panel
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}-${{ inputs.plugin_id }}
@@ -32,6 +25,7 @@ jobs:
     name: Build and publish ${{ inputs.plugin_id }}
     runs-on: ubuntu-latest
     outputs:
+      type: ${{ steps.get_dir.outputs.dir }}
       has_backend: ${{ steps.check_backend.outputs.has_backend }}
       version: ${{ steps.build_frontend.outputs.version }}
     steps:
@@ -51,14 +45,21 @@ jobs:
         with:
           node-version: ${{ env.NODEJS_VERSION }}
           cache: yarn
+      - name: Find plugin directory
+        shell: bash
+        id: get_dir
+        run: |
+          dir=$(find ./public/app/plugins -name ${{ inputs.plugin_id }} -quit)
+          echo "Got type $dir"
+          echo "dir=${dir}" >> $GITHUB_OUTPUT
       - name: Install frontend dependencies
         shell: bash
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         run: |
           yarn install --immutable
       - name: Download grabpl executable
         shell: sh
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         run: |
           [ ! -d ./bin ] && mkdir -pv ./bin || true
           curl -fL -o ./bin/grabpl https://grafana-downloads.storage.googleapis.com/grafana-build-pipeline/v${{ env.GRABPL_VERSION }}/grabpl
@@ -84,7 +85,7 @@ jobs:
           go install github.com/magefile/mage
       - name: Check tools
         shell: bash
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         run: |
           echo "======================================="
           echo "  Frontend tools"
@@ -108,7 +109,7 @@ jobs:
       - name: Check backend tools
         shell: bash
         if: steps.check_backend.outputs.has_backend == 'true'
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         run: |
           echo "======================================="
           echo "  Backend tools"
@@ -128,7 +129,7 @@ jobs:
             command="plugin:build"
           fi
           yarn $command --scope="@grafana-plugins/${{ inputs.plugin_id }}"
-          version=$(cat public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}/dist/plugin.json | jq -r .info.version)
+          version=$(cat ${{ steps.get_dir.outputs.dir }}/dist/plugin.json | jq -r .info.version)
           echo "version=${version}" >> $GITHUB_OUTPUT
       - name: build:backend
         if: steps.check_backend.outputs.has_backend == 'true'
@@ -138,7 +139,7 @@ jobs:
         run: |
           make build-plugin-go PLUGIN_ID=${{ inputs.plugin_id }}
       - name: package
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         run: |
           mkdir -p ci/jobs/package
           bin/grabpl plugin package
@@ -167,9 +168,9 @@ jobs:
         uses: actions/upload-artifact@v3
         with:
           name: build-artifacts
-          path: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}/ci/packages/*.zip
+          path: ${{ steps.get_dir.outputs.dir }}/ci/packages/*.zip
       - name: Publish release to Google Cloud Storage
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         env:
           VERSION: ${{ steps.build_frontend.outputs.version }}  
         run: |
@@ -180,7 +181,7 @@ jobs:
           gsutil -m cp -r ci/packages/*darwin* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${VERSION}/darwin
           gsutil -m cp -r ci/packages/*any* gs://${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${VERSION}/any
       - name: Publish new plugin version on grafana.com
-        working-directory: ./public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}
+        working-directory: ${{ steps.get_dir.outputs.dir }}
         env:
           GCOM_TOKEN: ${{ secrets.PLUGINS_GCOM_TOKEN }}
           VERSION: ${{ steps.build_frontend.outputs.version }}  
@@ -188,7 +189,7 @@ jobs:
           echo "Publish new plugin version on grafana.com:"
           echo "Plugin version: ${VERSION}"
           result=`curl -H "Authorization: Bearer $GCOM_TOKEN" -H "Content-Type: application/json" ${{ env.GCOM_API}}/api/plugins -d "{
-            \"url\": \"https://github.com/grafana/grafana/tree/main/public/app/plugins/${{ inputs.type }}/${{ inputs.plugin_id }}\",
+            \"url\": \"https://github.com/grafana/grafana/tree/main/${{ steps.get_dir.outputs.dir }}\",
             \"download\": {
               \"linux-amd64\": {
                 \"url\": \"https://storage.googleapis.com/${{ env.GCP_BUCKET }}/${{ inputs.plugin_id }}/release/${VERSION}/linux/${{ inputs.plugin_id }}-${VERSION}.linux_amd64.zip\",
