@@ -49,8 +49,8 @@ jobs:
         shell: bash
         id: get_dir
         run: |
-          dir=$(find ./public/app/plugins -name ${{ inputs.plugin_id }} -quit)
-          echo "Got type $dir"
+          dir=$(find public/app/plugins -name ${{ inputs.plugin_id }} -print -quit)
+          echo "Got dir $dir"
           echo "dir=${dir}" >> $GITHUB_OUTPUT
       - name: Install frontend dependencies
         shell: bash
